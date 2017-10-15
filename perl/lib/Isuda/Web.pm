@@ -44,6 +44,22 @@ sub isuda_dbh {
     });
 }
 
+sub isutar_dbh {
+    my ($self) = @_;
+    return $self->{isutar_dbh} //= DBIx::Sunny->connect(
+        $ENV{ISUTAR_DSN} // 'dbi:mysql:db=isutar', $ENV{ISUTAR_DB_USER} // 'root', $ENV{ISUTAR_DB_PASSWORD} // '', {
+            Callbacks => {
+                connected => sub {
+                    my $isutar_dbh = shift;
+                    $isutar_dbh->do(q[SET SESSION sql_mode='TRADITIONAL,NO_AUTO_VALUE_ON_ZERO,ONLY_FULL_GROUP_BY']);
+                    $isutar_dbh->do('SET NAMES utf8mb4');
+                    return;
+                },
+            },
+        },
+    );
+}
+
 filter 'set_name' => sub {
     my $app = shift;
     sub {
@@ -232,6 +248,26 @@ post '/keyword/:keyword' => [qw/set_name authenticate/] => sub {
     $c->redirect('/');
 };
 
+post '/stars' => sub {
+    my ($self, $c) = @_;
+    my $keyword = $c->req->parameters->{keyword};
+
+    my $count = $self->isuda_dbh->select_one(q[
+        SELECT COUNT(*) FROM entry WHERE keyword = ?
+    ], $keyword);
+
+    $c->halt(404) unless $count;
+
+    $self->isutar_dbh->query(q[
+        INSERT INTO star (keyword, user_name, created_at)
+        VALUES (?, ?, NOW())
+    ], $keyword, $c->req->parameters->{user});
+
+    $c->render_json({
+        result => 'ok',
+    });
+};
+
 sub htmlify {
     my ($self, $c, $content) = @_;
     return '' unless defined $content;
@@ -256,14 +292,9 @@ sub htmlify {
 sub load_stars {
     my ($self, $keyword) = @_;
 
-    my $origin = config('isutar_origin');
-    my $url = URI->new("$origin/stars");
-    $url->query_form(keyword => $keyword);
-    my $ua = Furl->new;
-    my $res = $ua->get($url);
-    my $data = decode_json $res->content;
-
-    $data->{stars};
+    return $self->isutar_dbh->select_all(q[
+        SELECT * FROM star WHERE keyword = ?
+    ], $keyword);
 }
 
 sub is_spam_contents {
