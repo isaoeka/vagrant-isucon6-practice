@@ -6,7 +6,7 @@ WorkingDirectory=/home/isucon/webapp/perl
 EnvironmentFile=/home/isucon/env.sh
 Environment=PLACK_ENV=production
 
-ExecStart = /home/isucon/.local/perl/bin/carton exec -- plackup -s Gazelle -p 5001 --max-workers=5 isutar.psgi
+ExecStart = /home/isucon/.local/perl/bin/carton exec -- plackup -s Gazelle -p 5001 --max-workers=15 isutar.psgi
 
 Restart   = always
 Type      = simple
