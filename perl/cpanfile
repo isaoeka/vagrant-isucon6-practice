@@ -7,6 +7,7 @@ requires 'Kossy';
 requires 'Plack::Builder';
 requires 'Plack::Middleware::ReverseProxy';
 requires 'Plack::Middleware::Session';
-requires 'Starlet';
 requires 'String::Random';
 requires 'URI::Escape';
+requires 'Gazelle';
+requires 'Data::Printer';
