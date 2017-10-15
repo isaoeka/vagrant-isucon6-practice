@@ -30,14 +30,14 @@ sub config {
     return $v;
 }
 
-sub dbh {
+sub isuda_dbh {
     my ($self) = @_;
-    return $self->{dbh} //= DBIx::Sunny->connect(config('dsn'), config('db_user'), config('db_password'), {
+    return $self->{isuda_dbh} //= DBIx::Sunny->connect(config('dsn'), config('db_user'), config('db_password'), {
         Callbacks => {
             connected => sub {
-                my $dbh = shift;
-                $dbh->do(q[SET SESSION sql_mode='TRADITIONAL,NO_AUTO_VALUE_ON_ZERO,ONLY_FULL_GROUP_BY']);
-                $dbh->do('SET NAMES utf8mb4');
+                my $isuda_dbh = shift;
+                $isuda_dbh->do(q[SET SESSION sql_mode='TRADITIONAL,NO_AUTO_VALUE_ON_ZERO,ONLY_FULL_GROUP_BY']);
+                $isuda_dbh->do('SET NAMES utf8mb4');
                 return;
             },
         },
@@ -51,7 +51,7 @@ filter 'set_name' => sub {
         my $user_id = $c->env->{'psgix.session'}->{user_id};
         if ($user_id) {
             $c->stash->{user_id} = $user_id;
-            $c->stash->{user_name} = $self->dbh->select_one(q[
+            $c->stash->{user_name} = $self->isuda_dbh->select_one(q[
                 SELECT name FROM user
                 WHERE id = ?
             ], $user_id);
@@ -72,12 +72,15 @@ filter 'authenticate' => sub {
 
 get '/initialize' => sub {
     my ($self, $c)  = @_;
-    $self->dbh->query(q[
+
+    # clean up
+    $self->isuda_dbh->query(q[
         DELETE FROM entry WHERE id > 7101
     ]);
-    my $origin = config('isutar_origin');
-    my $url = URI->new("$origin/initialize");
-    Furl->new->get($url);
+    $self->isutar_dbh->query('TRUNCATE star');
+
+    # warm up
+
     $c->render_json({
         result => 'ok',
     });
@@ -89,7 +92,7 @@ get '/' => [qw/set_name/] => sub {
     my $PER_PAGE = 10;
     my $page = $c->req->parameters->{page} || 1;
 
-    my $entries = $self->dbh->select_all(qq[
+    my $entries = $self->isuda_dbh->select_all(qq[
         SELECT * FROM entry
         ORDER BY updated_at DESC
         LIMIT $PER_PAGE
@@ -100,7 +103,7 @@ get '/' => [qw/set_name/] => sub {
         $entry->{stars} = $self->load_stars($entry->{keyword});
     }
 
-    my $total_entries = $self->dbh->select_one(q[
+    my $total_entries = $self->isuda_dbh->select_one(q[
         SELECT COUNT(*) FROM entry
     ]);
     my $last_page = ceil($total_entries / $PER_PAGE);
@@ -126,7 +129,7 @@ post '/keyword' => [qw/set_name authenticate/] => sub {
     if (is_spam_contents($description) || is_spam_contents($keyword)) {
         $c->halt(400, 'SPAM!');
     }
-    $self->dbh->query(q[
+    $self->isuda_dbh->query(q[
         INSERT INTO entry (author_id, keyword, description, created_at, updated_at)
         VALUES (?, ?, ?, NOW(), NOW())
         ON DUPLICATE KEY UPDATE
@@ -150,22 +153,22 @@ post '/register' => sub {
     my $pw   = $c->req->parameters->{password};
     $c->halt(400) if $name eq '' || $pw eq '';
 
-    my $user_id = register($self->dbh, $name, $pw);
+    my $user_id = register($self->isuda_dbh, $name, $pw);
 
     $c->env->{'psgix.session'}->{user_id} = $user_id;
     $c->redirect('/');
 };
 
 sub register {
-    my ($dbh, $user, $pass) = @_;
+    my ($isuda_dbh, $user, $pass) = @_;
 
     my $salt = random_string('....................');
-    $dbh->query(q[
+    $isuda_dbh->query(q[
         INSERT INTO user (name, salt, password, created_at)
         VALUES (?, ?, ?, NOW())
     ], $user, $salt, sha1_hex($salt . $pass));
 
-    return $dbh->last_insert_id;
+    return $isuda_dbh->last_insert_id;
 }
 
 get '/login' => [qw/set_name/] => sub {
@@ -179,7 +182,7 @@ post '/login' => sub {
     my ($self, $c) = @_;
 
     my $name = $c->req->parameters->{name};
-    my $row = $self->dbh->select_row(q[
+    my $row = $self->isuda_dbh->select_row(q[
         SELECT * FROM user
         WHERE name = ?
     ], $name);
@@ -201,7 +204,7 @@ get '/keyword/:keyword' => [qw/set_name/] => sub {
     my ($self, $c) = @_;
     my $keyword = $c->args->{keyword} // $c->halt(400);
 
-    my $entry = $self->dbh->select_row(qq[
+    my $entry = $self->isuda_dbh->select_row(qq[
         SELECT * FROM entry
         WHERE keyword = ?
     ], $keyword);
@@ -217,12 +220,12 @@ post '/keyword/:keyword' => [qw/set_name authenticate/] => sub {
     my $keyword = $c->args->{keyword} or $c->halt(400);
     $c->req->parameters->{delete} or $c->halt(400);
 
-    $c->halt(404) unless $self->dbh->select_row(qq[
+    $c->halt(404) unless $self->isuda_dbh->select_row(qq[
         SELECT * FROM entry
         WHERE keyword = ?
     ], $keyword);
 
-    $self->dbh->query(qq[
+    $self->isuda_dbh->query(qq[
         DELETE FROM entry
         WHERE keyword = ?
     ], $keyword);
@@ -232,7 +235,7 @@ post '/keyword/:keyword' => [qw/set_name authenticate/] => sub {
 sub htmlify {
     my ($self, $c, $content) = @_;
     return '' unless defined $content;
-    my $keywords = $self->dbh->select_all(qq[
+    my $keywords = $self->isuda_dbh->select_all(qq[
         SELECT * FROM entry ORDER BY CHARACTER_LENGTH(keyword) DESC
     ]);
     my %kw2sha;
@@ -252,14 +255,10 @@ sub htmlify {
 
 sub load_stars {
     my ($self, $keyword) = @_;
-    my $origin = config('isutar_origin');
-    my $url = URI->new("$origin/stars");
-    $url->query_form(keyword => $keyword);
-    my $ua = Furl->new;
-    my $res = $ua->get($url);
-    my $data = decode_json $res->content;
 
-    $data->{stars};
+    return $self->isutar_dbh->select_all(q[
+        SELECT * FROM star WHERE keyword = ?
+    ], $c->req->parameters->{keyword});
 }
 
 sub is_spam_contents {
