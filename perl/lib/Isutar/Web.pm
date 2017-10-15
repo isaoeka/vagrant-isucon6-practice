@@ -6,15 +6,15 @@ use DBIx::Sunny;
 use Furl;
 use URI::Escape qw/uri_escape_utf8/;
 
-sub dbh {
+sub isutar_dbh {
     my ($self) = @_;
-    return $self->{dbh} //= DBIx::Sunny->connect(
+    return $self->{isutar_dbh} //= DBIx::Sunny->connect(
         $ENV{ISUTAR_DSN} // 'dbi:mysql:db=isutar', $ENV{ISUTAR_DB_USER} // 'root', $ENV{ISUTAR_DB_PASSWORD} // '', {
             Callbacks => {
                 connected => sub {
-                    my $dbh = shift;
-                    $dbh->do(q[SET SESSION sql_mode='TRADITIONAL,NO_AUTO_VALUE_ON_ZERO,ONLY_FULL_GROUP_BY']);
-                    $dbh->do('SET NAMES utf8mb4');
+                    my $isutar_dbh = shift;
+                    $isutar_dbh->do(q[SET SESSION sql_mode='TRADITIONAL,NO_AUTO_VALUE_ON_ZERO,ONLY_FULL_GROUP_BY']);
+                    $isutar_dbh->do('SET NAMES utf8mb4');
                     return;
                 },
             },
@@ -22,18 +22,10 @@ sub dbh {
     );
 }
 
-get '/initialize' => sub {
-    my ($self, $c) = @_;
-    $self->dbh->query('TRUNCATE star');
-    $c->render_json({
-        result => 'ok',
-    });
-};
-
 get '/stars' => sub {
     my ($self, $c) = @_;
 
-    my $stars = $self->dbh->select_all(q[
+    my $stars = $self->isutar_dbh->select_all(q[
         SELECT * FROM star WHERE keyword = ?
     ], $c->req->parameters->{keyword});
 
@@ -53,7 +45,7 @@ post '/stars' => sub {
         $c->halt(404);
     }
 
-    $self->dbh->query(q[
+    $self->isutar_dbh->query(q[
         INSERT INTO star (keyword, user_name, created_at)
         VALUES (?, ?, NOW())
     ], $keyword, $c->req->parameters->{user});
